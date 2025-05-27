@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Weather Voice Agent</title>
+</head>
+<body>
+  <button id="recordBtn">Speak Now</button>
+  <div id="result"></div>
+
+  <script>
+    const recordBtn = document.getElementById('recordBtn');
+    const resultDiv = document.getElementById('result');
+
+    recordBtn.addEventListener('click', async () => {
+      try {
+        resultDiv.textContent = "Requesting microphone access...";
+
+        // Get audio stream
+        let stream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (err) {
+          throw new Error('Microphone access denied or unavailable: ' + err.message);
+        }
+
+        // Specify codec for WebM (Opus is Whisper-compatible)
+        const options = { mimeType: 'audio/webm;codecs=opus' };
+        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+          console.warn('audio/webm;codecs=opus not supported, falling back to audio/webm');
+          options.mimeType = 'audio/webm';
+          if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+            throw new Error('No supported audio format for MediaRecorder');
+          }
+        }
+
+        const mediaRecorder = new MediaRecorder(stream, options);
+        const audioChunks = [];
+
+        mediaRecorder.ondataavailable = e => {
+          if (e.data.size > 0) {
+            audioChunks.push(e.data);
+            console.log('Audio chunk received, size:', e.data.size);
+          } else {
+            console.warn('Empty audio chunk received');
+          }
+        };
+
+        mediaRecorder.onstop = () => {
+          console.log('MediaRecorder stopped, chunks collected:', audioChunks.length);
+        };
+
+        mediaRecorder.onerror = (e) => {
+          console.error('MediaRecorder error:', e.error);
+          resultDiv.textContent = 'Recording error: ' + e.error.message;
+        };
+
+        resultDiv.textContent = "Listening...";
+        mediaRecorder.start();
+        console.log('MediaRecorder started with MIME type:', options.mimeType);
+
+        // Wait for recording to stop and data to be collected
+        await new Promise(resolve => {
+          mediaRecorder.onstop = () => {
+            console.log('MediaRecorder stopped, chunks collected:', audioChunks.length);
+            resolve();
+          };
+          setTimeout(() => mediaRecorder.stop(), 7000);
+        });
+
+        stream.getTracks().forEach(track => track.stop());
+
+        if (audioChunks.length === 0) {
+          throw new Error('No audio data recorded. Please ensure your microphone is working.');
+        }
+
+        // Create audio blob
+        const audioBlob = new Blob(audioChunks, { type: options.mimeType });
+        console.log('Audio blob created, size:', audioBlob.size, 'type:', audioBlob.type);
+
+        // Create FormData
+        const formData = new FormData();
+        formData.append('audio', audioBlob, 'recording.webm');
+
+        resultDiv.textContent = "Processing...";
+
+        // Send to server
+        const response = await fetch('/voice-command', {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || 'Server error');
+        }
+
+        const data = await response.json();
+        resultDiv.textContent = data.text;
+
+        // Speak the response
+        const speech = new SpeechSynthesisUtterance(data.text);
+        window.speechSynthesis.speak(speech);
+
+      } catch (error) {
+        resultDiv.textContent = "Error: " + error.message;
+        console.error('Error:', error);
+      }
+    });
+  </script>
+</body>
+</html>
